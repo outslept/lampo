@@ -1,5 +1,5 @@
 {
-  "name": "json-crdt",
+  "name": "lampo",
   "version": "0.1.0",
   "description": "Operation-based JSON CRDT with causal Map, List (RGA), and MV-Register",
   "files": [
