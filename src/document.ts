@@ -232,12 +232,11 @@ export class JsonCrdtDocument {
         for (const pid of readyIds) {
           const pop = this.pendingById.get(pid);
           if (!pop) continue;
+          this.pendingById.delete(pid);
           try {
             this.apply(pop);
           } catch (err) {
             console.error("Failed to apply pending op", pid, err);
-          } finally {
-            this.pendingById.delete(pid);
           }
         }
       }
