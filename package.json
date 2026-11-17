@@ -1,34 +1,42 @@
 {
   "name": "json-crdt",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Operation-based JSON CRDT with causal Map, List (RGA), and MV-Register",
   "files": [
     "dist"
   ],
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.cts",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.cts",
-      "require": "./dist/index.cjs",
-      "import": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check"
+    "fmt:check": "oxfmt --check",
+    "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test",
+    "prepublishOnly": "pnpm check && pnpm build"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "@vitest/coverage-v8": "4.0.3",
     "oxfmt": "^0.64.0",
     "oxlint": "^1.79.0",
+    "tsdown": "^0.23.7",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "packageManager": "pnpm@11.23.0"
 }
