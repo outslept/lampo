@@ -1,9 +1,5 @@
 export { cursorAt, type Cursor } from "./cursor.js";
-export {
-  JsonCrdtDocument,
-  type Snapshot,
-  type StateVector,
-} from "./document.js";
+export { JsonCrdtDocument, type Snapshot, type StateVector } from "./document.js";
 export { LIST_HEAD, type ElemId, type ListHead } from "./model.js";
 export {
   fromWire,
