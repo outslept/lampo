@@ -19,9 +19,13 @@ export interface RegNode {
 }
 
 export interface ElemContainer {
-  reg?: RegNode;
-  map?: MapNode;
-  list?: ListNode;
+  reg?: RegNode | undefined;
+  map?: MapNode | undefined;
+  list?: ListNode | undefined;
+}
+
+export function createElemContainer(): ElemContainer {
+  return { reg: undefined, map: undefined, list: undefined };
 }
 
 export type ElemId = TimestampStr;

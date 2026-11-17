@@ -1,4 +1,5 @@
 import {
+  createElemContainer,
   LIST_HEAD,
   LIST_TAIL,
   namespaceKey,
@@ -6,6 +7,7 @@ import {
   type ElemId,
   type ListNextKey,
   type ListNextVal,
+  type ListNode,
   type MapNode,
   type RegNode,
 } from "./model.js";
@@ -18,6 +20,7 @@ import {
   getListNodeAt,
 } from "./tree.js";
 import type {
+  JsonPrimitive,
   OpAssignElemEmptyList,
   OpAssignElemEmptyMap,
   OpAssignElemMapPrimitive,
@@ -35,6 +38,34 @@ import type {
 
 function isElemId(x: ListNextVal): x is ElemId {
   return x !== LIST_TAIL;
+}
+
+function insertListElement(
+  list: ListNode,
+  prev: ListNextKey,
+  idStr: ElemId,
+  value: JsonPrimitive,
+  errMsg: string,
+): void {
+  let next = list.next.get(prev);
+  if (next === undefined) throw new Error(errMsg);
+
+  let at: ListNextKey = prev;
+  while (isElemId(next) && cmpTimestampStr(idStr, next) < 0) {
+    at = next;
+    next = list.next.get(at) ?? LIST_TAIL;
+  }
+
+  list.next.set(at, idStr);
+  list.next.set(idStr, next);
+
+  const pres = list.presence.get(idStr);
+  if (pres) pres.add(idStr);
+  else list.presence.set(idStr, new Set([idStr]));
+
+  const container: ElemContainer = list.elements.get(idStr) ?? createElemContainer();
+  container.reg = { kind: "reg", values: new Map([[idStr, value]]) };
+  list.elements.set(idStr, container);
 }
 
 export function handleAssignPrimitive(root: MapNode, op: OpAssignPrimitive): void {
@@ -126,28 +157,14 @@ export function handleInsertListPrimitive(root: MapNode, op: OpInsertListPrimiti
     );
   }
 
-  const prev: ListNextKey = op.mut.after;
-  if (prev !== LIST_HEAD && !list.next.has(prev)) {
-    throw new Error(`unknown predecessor element ${prev} for list ${op.cursor.key}`);
-  }
-
-  let at: ListNextKey = prev;
-  let next: ListNextVal = list.next.get(at) ?? LIST_TAIL;
-  while (isElemId(next) && cmpTimestampStr(idStr, next) < 0) {
-    at = next;
-    next = list.next.get(at) ?? LIST_TAIL;
-  }
-
-  list.next.set(at, idStr);
-  list.next.set(idStr, next);
-
-  const pres = list.presence.get(idStr);
-  if (pres) pres.add(idStr);
-  else list.presence.set(idStr, new Set([idStr]));
-
-  const container: ElemContainer = list.elements.get(idStr) ?? {};
-  container.reg = { kind: "reg", values: new Map([[idStr, op.mut.value]]) };
-  list.elements.set(idStr, container);
+  addPresenceForKey(parent, op.cursor.key, idStr);
+  insertListElement(
+    list,
+    op.mut.after,
+    idStr,
+    op.mut.value,
+    `unknown predecessor element ${op.mut.after} for list ${op.cursor.key}`,
+  );
 }
 
 export function handleDeleteKey(root: MapNode, op: OpDeleteKey): void {
@@ -163,10 +180,13 @@ export function handleDeleteListElement(root: MapNode, op: OpDeleteListElement):
   if (!list || list.kind !== "list") return;
 
   const pres = list.presence.get(op.mut.elementId);
-  if (pres) for (const d of op.deps) pres.delete(d);
+  if (pres) {
+    for (const d of op.deps) pres.delete(d);
+  } else {
+    list.presence.set(op.mut.elementId, new Set());
+  }
   const container = list.elements.get(op.mut.elementId);
   if (container) clearElementContainerCausally(container, op.deps);
-  if (!list.presence.has(op.mut.elementId)) list.presence.set(op.mut.elementId, new Set());
 }
 
 export function handleAssignElemPrimitive(root: MapNode, op: OpAssignElemPrimitive): void {
@@ -181,9 +201,9 @@ export function handleAssignElemPrimitive(root: MapNode, op: OpAssignElemPrimiti
   if (elPres) elPres.add(idStr);
   else list.presence.set(op.mut.elementId, new Set([idStr]));
 
-  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? {};
+  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? createElemContainer();
+  clearElementContainerCausally(container, op.deps);
   if (!container.reg) container.reg = { kind: "reg", values: new Map() };
-  for (const d of op.deps) container.reg.values.delete(d);
   container.reg.values.set(idStr, op.mut.value);
   list.elements.set(op.mut.elementId, container);
 }
@@ -200,7 +220,7 @@ export function handleAssignElemEmptyMap(root: MapNode, op: OpAssignElemEmptyMap
   if (elPres) elPres.add(idStr);
   else list.presence.set(op.mut.elementId, new Set([idStr]));
 
-  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? {};
+  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? createElemContainer();
   if (!container.map) container.map = { kind: "map", entries: new Map(), presence: new Map() };
   clearElementContainerCausally(container, op.deps);
   list.elements.set(op.mut.elementId, container);
@@ -218,7 +238,7 @@ export function handleAssignElemEmptyList(root: MapNode, op: OpAssignElemEmptyLi
   if (elPres) elPres.add(idStr);
   else list.presence.set(op.mut.elementId, new Set([idStr]));
 
-  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? {};
+  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? createElemContainer();
   if (!container.list) {
     const next = new Map<ListNextKey, ListNextVal>();
     next.set(LIST_HEAD, LIST_TAIL);
@@ -245,7 +265,7 @@ export function handleAssignElemMapPrimitive(root: MapNode, op: OpAssignElemMapP
   if (elPres) elPres.add(idStr);
   else list.presence.set(op.mut.elementId, new Set([idStr]));
 
-  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? {};
+  const container: ElemContainer = list.elements.get(op.mut.elementId) ?? createElemContainer();
   if (!container.map) container.map = { kind: "map", entries: new Map(), presence: new Map() };
   const parent = descendMap(container.map, op.mut.path, idStr, true);
   if (!parent) throw new Error("invalid element map path");
@@ -285,7 +305,8 @@ export function handleInsertElemListPrimitive(root: MapNode, op: OpInsertElemLis
   if (elPres) elPres.add(idStr);
   else outerList.presence.set(op.mut.elementId, new Set([idStr]));
 
-  const container: ElemContainer = outerList.elements.get(op.mut.elementId) ?? {};
+  const container: ElemContainer =
+    outerList.elements.get(op.mut.elementId) ?? createElemContainer();
   if (!container.list) {
     const next = new Map<ListNextKey, ListNextVal>();
     next.set(LIST_HEAD, LIST_TAIL);
@@ -296,27 +317,14 @@ export function handleInsertElemListPrimitive(root: MapNode, op: OpInsertElemLis
       elements: new Map(),
     };
   }
-  const inner = container.list;
 
-  const prev: ListNextKey = op.mut.after;
-  if (prev !== LIST_HEAD && !inner.next.has(prev))
-    throw new Error(`unknown inner predecessor ${prev}`);
-  let at: ListNextKey = prev;
-  let next: ListNextVal = inner.next.get(at) ?? LIST_TAIL;
-  while (isElemId(next) && cmpTimestampStr(idStr, next) < 0) {
-    at = next;
-    next = inner.next.get(at) ?? LIST_TAIL;
-  }
-  inner.next.set(at, idStr);
-  inner.next.set(idStr, next);
-
-  const pres = inner.presence.get(idStr);
-  if (pres) pres.add(idStr);
-  else inner.presence.set(idStr, new Set([idStr]));
-
-  inner.elements.set(idStr, {
-    reg: { kind: "reg", values: new Map([[idStr, op.mut.value]]) },
-  });
+  insertListElement(
+    container.list,
+    op.mut.after,
+    idStr,
+    op.mut.value,
+    `unknown inner predecessor ${op.mut.after}`,
+  );
   outerList.elements.set(op.mut.elementId, container);
 }
 
@@ -329,11 +337,13 @@ export function handleDeleteElemListElement(root: MapNode, op: OpDeleteElemListE
 
   const inner = container.list;
   const pres = inner.presence.get(op.mut.childElementId);
-  if (pres) for (const d of op.deps) pres.delete(d);
+  if (pres) {
+    for (const d of op.deps) pres.delete(d);
+  } else {
+    inner.presence.set(op.mut.childElementId, new Set());
+  }
   const payload = inner.elements.get(op.mut.childElementId);
   if (payload) clearElementContainerCausally(payload, op.deps);
-  if (!inner.presence.has(op.mut.childElementId))
-    inner.presence.set(op.mut.childElementId, new Set());
 }
 
 export function handleDeleteElemMapKey(root: MapNode, op: OpDeleteElemMapKey): void {

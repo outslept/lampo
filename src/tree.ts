@@ -61,8 +61,7 @@ export function clearRegisterCausally(reg: RegNode, deps: Set<TimestampStr>): vo
 }
 
 export function clearMapCausally(map: MapNode, deps: Set<TimestampStr>): void {
-  for (const [plainKey, pres] of map.presence.entries()) {
-    for (const d of deps) pres.delete(d);
+  for (const plainKey of map.presence.keys()) {
     clearKeyCausally(map, plainKey, deps);
   }
 }
@@ -77,11 +76,13 @@ export function* iterateListIds(list: ListNode): IterableIterator<ElemId> {
 }
 
 export function clearListCausally(list: ListNode, deps: Set<TimestampStr>): void {
-  for (const id of iterateListIds(list)) {
-    const pres = list.presence.get(id);
+  let cur = list.next.get(LIST_HEAD);
+  while (cur && cur !== LIST_TAIL) {
+    const pres = list.presence.get(cur);
     if (pres) for (const d of deps) pres.delete(d);
-    const container = list.elements.get(id);
+    const container = list.elements.get(cur);
     if (container) clearElementContainerCausally(container, deps);
+    cur = list.next.get(cur);
   }
 }
 

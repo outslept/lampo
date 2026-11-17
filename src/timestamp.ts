@@ -30,7 +30,19 @@ export function tsFromString(s: string): LamportTimestamp {
 }
 
 export function cmpTimestampStr(a: TimestampStr, b: TimestampStr): number {
-  return cmpTimestamp(tsFromString(a), tsFromString(b));
+  const ia = a.indexOf(":");
+  const ib = b.indexOf(":");
+  if (ia === -1 || ib === -1) return cmpTimestamp(tsFromString(a), tsFromString(b));
+  const ca = Number(a.slice(0, ia));
+  const cb = Number(b.slice(0, ib));
+  if (!Number.isFinite(ca) || !Number.isFinite(cb)) {
+    return cmpTimestamp(tsFromString(a), tsFromString(b));
+  }
+  if (ca !== cb) return ca < cb ? -1 : 1;
+  if (a === b) return 0;
+  const pa = a.slice(ia + 1);
+  const pb = b.slice(ib + 1);
+  return pa < pb ? -1 : pa > pb ? 1 : 0;
 }
 
 export class LamportClock {

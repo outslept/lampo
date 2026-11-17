@@ -32,6 +32,7 @@ import {
 import {
   cmpTimestampStr,
   LamportClock,
+  tsFromString,
   tsToString,
   type ReplicaID,
   type TimestampStr,
@@ -91,10 +92,7 @@ export class JsonCrdtDocument {
   getStateVector(): StateVector {
     const sv: StateVector = {};
     for (const id of this.processed) {
-      const { c, p } = (() => {
-        const i = id.indexOf(":");
-        return { c: Number(id.slice(0, i)), p: id.slice(i + 1) };
-      })();
+      const { c, p } = tsFromString(id);
       sv[p] = Math.max(sv[p] ?? 0, c);
     }
     return sv;
@@ -142,12 +140,12 @@ export class JsonCrdtDocument {
     const start = reuseClock ? snap.clock : 0;
     const doc = new JsonCrdtDocument(myReplicaId ?? snap.replicaId, start);
 
-    for (const id of snap.processedIds) doc.processed.add(id);
     for (const [p, c] of Object.entries(snap.stateVector)) {
       doc.clock.observe({ c, p });
     }
 
     doc.receiveWireBatch(snap.ops);
+    for (const id of snap.processedIds) doc.processed.add(id);
     return doc;
   }
 
@@ -238,7 +236,6 @@ export class JsonCrdtDocument {
             this.apply(pop);
           } catch (err) {
             console.error("Failed to apply pending op", pid, err);
-            this.processed.add(pid);
           } finally {
             this.pendingById.delete(pid);
           }
@@ -554,63 +551,59 @@ export class JsonCrdtDocument {
 
   private compactMap(node: MapNode, gc: StateVector): void {
     for (const [k, pres] of node.presence.entries()) {
-      for (const id of Array.from(pres)) {
-        const ts = (() => {
-          const i = id.indexOf(":");
-          return { c: Number(id.slice(0, i)), p: id.slice(i + 1) };
-        })();
+      for (const id of pres) {
+        const ts = tsFromString(id);
         if ((gc[ts.p] ?? 0) >= ts.c) pres.delete(id);
       }
       this.compactAtKey(node, k, gc);
       const compositeEmpty =
-        !node.entries.get(namespaceKey("regT", k)) &&
-        !node.entries.get(namespaceKey("mapT", k)) &&
-        !node.entries.get(namespaceKey("listT", k));
+        !node.entries.has(namespaceKey("regT", k)) &&
+        !node.entries.has(namespaceKey("mapT", k)) &&
+        !node.entries.has(namespaceKey("listT", k));
       if (pres.size === 0 && compositeEmpty) node.presence.delete(k);
     }
   }
 
   private compactAtKey(parent: MapNode, key: string, gc: StateVector): void {
-    const r = parent.entries.get(namespaceKey("regT", key));
+    const regKey = namespaceKey("regT", key);
+    const r = parent.entries.get(regKey);
     if (r && r.kind === "reg") {
-      for (const id of Array.from(r.values.keys())) {
-        const ts = (() => {
-          const i = id.indexOf(":");
-          return { c: Number(id.slice(0, i)), p: id.slice(i + 1) };
-        })();
+      for (const id of r.values.keys()) {
+        const ts = tsFromString(id);
         if ((gc[ts.p] ?? 0) >= ts.c) r.values.delete(id);
       }
-      if (r.values.size === 0) parent.entries.delete(namespaceKey("regT", key));
+      if (r.values.size === 0) parent.entries.delete(regKey);
     }
-    const m = parent.entries.get(namespaceKey("mapT", key));
+    const mapKey = namespaceKey("mapT", key);
+    const m = parent.entries.get(mapKey);
     if (m && m.kind === "map") {
       this.compactMap(m, gc);
-      if (m.presence.size === 0 && m.entries.size === 0)
-        parent.entries.delete(namespaceKey("mapT", key));
+      if (m.presence.size === 0 && m.entries.size === 0) parent.entries.delete(mapKey);
     }
-    const l = parent.entries.get(namespaceKey("listT", key));
+    const listKey = namespaceKey("listT", key);
+    const l = parent.entries.get(listKey);
     if (l && l.kind === "list") {
       this.compactList(l, gc);
       if (l.presence.size === 0 && l.elements.size === 0) {
-        parent.entries.delete(namespaceKey("listT", key));
+        parent.entries.delete(listKey);
       }
     }
   }
 
   private compactList(list: ListNode, gc: StateVector): void {
-    const alive: ElemId[] = [];
+    const newNext = new Map<typeof LIST_HEAD | ElemId, typeof LIST_TAIL | ElemId>();
+    let prev: typeof LIST_HEAD | ElemId = LIST_HEAD;
+
     let cur = list.next.get(LIST_HEAD);
     while (cur && cur !== LIST_TAIL) {
       const id = cur;
-      const pres = list.presence.get(id) ?? new Set<TimestampStr>();
-      for (const pid of Array.from(pres)) {
-        const ts = (() => {
-          const i = pid.indexOf(":");
-          return { c: Number(pid.slice(0, i)), p: pid.slice(i + 1) };
-        })();
-        if ((gc[ts.p] ?? 0) >= ts.c) pres.delete(pid);
+      const pres = list.presence.get(id);
+      if (pres) {
+        for (const pid of pres) {
+          const ts = tsFromString(pid);
+          if ((gc[ts.p] ?? 0) >= ts.c) pres.delete(pid);
+        }
       }
-      if (pres.size === 0) list.presence.set(id, pres);
 
       const container = list.elements.get(id);
       const containerEmpty =
@@ -620,28 +613,23 @@ export class JsonCrdtDocument {
           (container.map?.presence.size ?? 0) === 0 &&
           (container.list?.elements.size ?? 0) === 0);
 
-      if (pres.size > 0 || !containerEmpty) alive.push(id);
-      else list.elements.delete(id);
+      if ((pres && pres.size > 0) || !containerEmpty) {
+        if (!pres) list.presence.set(id, new Set());
+        newNext.set(prev, id);
+        prev = id;
+      } else {
+        list.elements.delete(id);
+        list.presence.delete(id);
+      }
 
       cur = list.next.get(id);
     }
 
-    const newNext = new Map<typeof LIST_HEAD | ElemId, typeof LIST_TAIL | ElemId>();
-    newNext.set(LIST_HEAD, LIST_TAIL);
-    let prev: typeof LIST_HEAD | ElemId = LIST_HEAD;
-    for (const id of alive) {
-      newNext.set(prev, id);
-      prev = id;
-    }
     newNext.set(prev, LIST_TAIL);
     list.next = newNext;
 
-    const aliveSet = new Set(alive);
-    for (const key of Array.from(list.presence.keys())) {
-      if (!aliveSet.has(key)) {
-        const pres = list.presence.get(key);
-        if (pres && pres.size === 0) list.presence.delete(key);
-      }
+    for (const [key, pres] of list.presence) {
+      if (pres.size === 0 && !newNext.has(key)) list.presence.delete(key);
     }
   }
 
